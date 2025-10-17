@@ -1,0 +1,103 @@
+<!-- booking/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Book a Session | Your Practice</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/styles/main.css" rel="stylesheet" />
+  <style>
+    /* page-specific touches (optional) */
+    .booking-hero { padding: 64px 0 24px; text-align: center; }
+    .breadcrumb { font-size: .9rem; opacity:.7; margin-bottom:8px; }
+    .card.selected { outline:2px solid var(--gold); }
+  </style>
+</head>
+<body>
+  <header class="site-header glass">
+    <nav class="container">
+      <a href="/" class="logo">Your Practice</a>
+      <ul class="nav">
+        <li><a href="/">Home</a></li>
+        <li><a class="active" href="/booking/">Booking</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main>
+    <section class="booking-hero">
+      <div class="container">
+        <div class="breadcrumb"><a href="/">Home</a> / Booking</div>
+        <h1>Book a Session</h1>
+        <p class="section-intro">Choose an open time below. You’ll receive a confirmation by email.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <!-- Add inside the Booking section, ABOVE the <div id="slotGrid"> -->
+<div class="card glass" style="margin-bottom:16px; padding:12px;">
+  <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+    <strong>Select a day:</strong>
+    <button type="button" id="prevDay" class="btn-outline">◀</button>
+    <input type="date" id="slotDate" />
+    <button type="button" id="nextDay" class="btn-outline">▶</button>
+    <button type="button" id="todayBtn" class="btn-outline">Today</button>
+    <span id="dateNote" class="muted"></span>
+  </div>
+</div>
+
+        <!-- Slots grid -->
+        <div class="cards" id="slotGrid"></div>
+
+        <!-- Booking form -->
+        <div class="card glass" style="margin-top:16px; padding:16px;">
+          <form id="bookingForm" class="form" novalidate>
+            <div class="row-2">
+              <div class="field">
+                <label>Full Name
+                  <input name="name" required />
+                </label>
+              </div>
+              <div class="field">
+                <label>Email
+                  <input type="email" name="email" required />
+                </label>
+              </div>
+            </div>
+
+            <div class="row-2">
+              <div class="field">
+                <label>Phone (optional)
+                  <input name="phone" />
+                </label>
+              </div>
+              <div class="field">
+                <label>Selected Slot
+                  <input id="selectedSlotLabel" readonly placeholder="Pick a time below" />
+                  <input type="hidden" name="slot_id" id="slotIdInput" />
+                </label>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>Notes (optional)
+                <textarea name="note" rows="3"></textarea>
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn" type="submit">Confirm Booking</button>
+              <span id="bookMsg" class="notice" role="status" aria-live="polite"></span>
+            </div>
+          </form>
+        </div>
+
+        <p style="margin-top:16px;"><a class="btn-outline" href="/">← Back to Home</a></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/scripts/booking.js" type="module"></script>
+</body>
+</html>

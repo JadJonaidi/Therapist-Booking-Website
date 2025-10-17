@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Admin | Scheduling</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="/styles/main.css" rel="stylesheet" />
+  <style>
+    .admin-wrap { padding: 24px 0; }
+    .grid-2 { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    @media (max-width: 900px){ .grid-2{ grid-template-columns:1fr } }
+    table { width:100%; border-collapse: collapse; }
+    th, td { padding:10px; border-bottom:1px solid #eee; text-align:left; }
+    code.key { padding:2px 6px; border:1px dashed #bbb; border-radius:6px; background:#fafafa }
+  </style>
+</head>
+<body>
+  <main class="container admin-wrap">
+    <h1>Admin – Scheduling</h1>
+    <p class="muted">Enter your admin key to manage slots & view bookings.</p>
+
+    <div class="card glass" style="padding:16px;margin-bottom:16px;">
+      <label>Admin Key
+        <input id="adminKey" placeholder="Enter ADMIN_KEY" />
+      </label>
+      <button id="saveKey" class="btn" style="margin-left:8px;">Use Key</button>
+      <span id="keyStatus" class="muted"></span>
+      <p class="muted" style="margin-top:6px;">(Set the key in your <code class="key">.env</code> as <code class="key">ADMIN_KEY</code>)</p>
+    </div>
+
+    <div class="grid-2">
+      <section class="card glass" style="padding:16px;">
+        <h2>Add Slot</h2>
+        <div class="row-2">
+          <label>Date <input id="date" type="date" /></label>
+          <label>Start (HH:MM) <input id="start" placeholder="10:00" /></label>
+        </div>
+        <div class="row-2" style="margin-top:8px;">
+          <label>Duration (min)
+            <input id="duration" type="number" value="50" min="15" step="5" />
+          </label>
+          <label>Service Type
+            <select id="stype">
+              <option value="individual">Individual</option>
+              <option value="couple">Couple</option>
+              <option value="extended">Extended</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:8px;">
+          <label><input type="checkbox" id="active" checked /> Active</label>
+        </div>
+        <div class="form-actions" style="margin-top:10px;">
+          <button id="addSlotBtn" class="btn">Add Slot</button>
+          <span id="addMsg" class="notice"></span>
+        </div>
+      </section>
+
+      <section class="card glass" style="padding:16px;">
+        <h2>Upcoming Slots</h2>
+        <div class="row-2">
+          <label>From <input id="fromDate" type="date" /></label>
+          <label>Days <input id="days" type="number" value="30" min="1" max="180" /></label>
+        </div>
+        <button id="loadSlots" class="btn" style="margin-top:8px;">Refresh</button>
+        <div id="slotsWrap" style="margin-top:10px; overflow:auto;">
+          <table>
+            <thead><tr><th>Date</th><th>Time</th><th>Dur</th><th>Type</th><th>Status</th><th></th></tr></thead>
+            <tbody id="slotsTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <section class="card glass" style="padding:16px;margin-top:16px;">
+      <h2>Bookings</h2>
+      <div class="row-2">
+        <label>From <input id="bFrom" type="date" /></label>
+        <label>Days <input id="bDays" type="number" value="60" min="1" max="365" /></label>
+      </div>
+      <button id="loadBookings" class="btn" style="margin-top:8px;">Refresh</button>
+      <div id="bookingsWrap" style="margin-top:10px; overflow:auto;">
+        <table>
+          <thead><tr><th>Date</th><th>Time</th><th>Type</th><th>Client</th><th>Email</th><th>Phone</th><th>Note</th></tr></thead>
+          <tbody id="bookingsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    const pad = n => String(n).padStart(2,'0');
+    const dateToValue = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const fmt = iso => {
+      const d = new Date(iso);
+      return {
+        date: d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}),
+        time: d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})
+      };
+    };
+
+    // store key in localStorage for convenience
+    const keyInput = document.querySelector('#adminKey');
+    const keyStatus = document.querySelector('#keyStatus');
+    const saveKeyBtn = document.querySelector('#saveKey');
+    let ADMIN_KEY = localStorage.getItem('ADMIN_KEY') || '';
+    keyInput.value = ADMIN_KEY;
+    saveKeyBtn.addEventListener('click', ()=> {
+      ADMIN_KEY = keyInput.value.trim();
+      localStorage.setItem('ADMIN_KEY', ADMIN_KEY);
+      keyStatus.textContent = ADMIN_KEY ? 'Key saved.' : 'Key cleared.';
+    });
+
+    // defaults for date pickers
+    const today = new Date();
+    document.querySelector('#fromDate').value = dateToValue(today);
+    document.querySelector('#bFrom').value = dateToValue(new Date(today.getTime()-7*86400000));
+    document.querySelector('#date').value = dateToValue(today);
+
+    // Add slot
+    const addMsg = document.querySelector('#addMsg');
+    document.querySelector('#addSlotBtn').addEventListener('click', async () => {
+      addMsg.textContent = 'Adding…';
+      const body = {
+        date: document.querySelector('#date').value,
+        startHHMM: document.querySelector('#start').value,
+        duration_minutes: document.querySelector('#duration').value,
+        service_type: document.querySelector('#stype').value,
+        is_active: document.querySelector('#active').checked ? 1 : 0
+      };
+      try {
+        const r = await fetch('/api/admin/slots', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json', 'x-admin-key': ADMIN_KEY },
+          body: JSON.stringify(body)
+        });
+        const out = await r.json();
+        if (!r.ok) throw new Error(out.error || 'Failed');
+        addMsg.textContent = 'Added.';
+        document.querySelector('#loadSlots').click();
+      } catch(e) { addMsg.textContent = e.message; }
+    });
+
+    // Load slots
+    const slotsTbody = document.querySelector('#slotsTbody');
+    document.querySelector('#loadSlots').addEventListener('click', async () => {
+      slotsTbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+      const from = document.querySelector('#fromDate').value;
+      const days = document.querySelector('#days').value || 30;
+      try {
+        const r = await fetch(`/api/admin/slots?from=${encodeURIComponent(from)}&days=${days}`, {
+          headers:{ 'x-admin-key': ADMIN_KEY }
+        });
+        const rows = await r.json();
+        if (!Array.isArray(rows)) throw new Error(rows.error || 'Failed');
+        if (rows.length === 0) { slotsTbody.innerHTML = '<tr><td colspan="6">No slots</td></tr>'; return; }
+        slotsTbody.innerHTML = '';
+        rows.forEach(s => {
+          const start = fmt(s.starts_at), end = fmt(s.ends_at);
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${start.date}</td>
+            <td>${start.time}–${end.time}</td>
+            <td>${s.duration_minutes}m</td>
+            <td>${s.service_type}</td>
+            <td>${s.is_active ? 'Active' : 'Inactive'}</td>
+            <td><button class="btn-outline" data-del="${s.id}">Delete</button></td>
+          `;
+          tr.querySelector('button[data-del]').addEventListener('click', async () => {
+            if (!confirm('Delete this slot? (Only possible if not booked)')) return;
+            const id = s.id;
+            const rr = await fetch(`/api/admin/slots/${id}`, {
+              method:'DELETE',
+              headers:{ 'x-admin-key': ADMIN_KEY }
+            });
+            const out = await rr.json();
+            if (!rr.ok) { alert(out.error || 'Failed'); return; }
+            tr.remove();
+          });
+          slotsTbody.appendChild(tr);
+        });
+      } catch(e){ slotsTbody.innerHTML = `<tr><td colspan="6">${e.message}</td></tr>`; }
+    });
+
+    // Load bookings
+    const bookingsTbody = document.querySelector('#bookingsTbody');
+    document.querySelector('#loadBookings').addEventListener('click', async () => {
+      bookingsTbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+      const from = document.querySelector('#bFrom').value;
+      const days = document.querySelector('#bDays').value || 60;
+      try {
+        const r = await fetch(`/api/admin/bookings?from=${encodeURIComponent(from)}&days=${days}`, {
+          headers:{ 'x-admin-key': ADMIN_KEY }
+        });
+        const rows = await r.json();
+        if (!Array.isArray(rows)) throw new Error(rows.error || 'Failed');
+        if (rows.length === 0) { bookingsTbody.innerHTML = '<tr><td colspan="7">No bookings</td></tr>'; return; }
+        bookingsTbody.innerHTML = '';
+        rows.forEach(b => {
+          const start = fmt(b.starts_at), end = fmt(b.ends_at);
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${start.date}</td>
+            <td>${start.time}–${end.time}</td>
+            <td>${b.service_type} (${b.duration_minutes}m)</td>
+            <td>${b.name}</td>
+            <td>${b.email}</td>
+            <td>${b.phone || ''}</td>
+            <td>${b.note || ''}</td>
+          `;
+          bookingsTbody.appendChild(tr);
+        });
+      } catch(e){ bookingsTbody.innerHTML = `<tr><td colspan="7">${e.message}</td></tr>`; }
+    });
+
+    // initial loads
+    document.querySelector('#loadSlots').click();
+    document.querySelector('#loadBookings').click();
+  </script>
+</body>
+</html>
