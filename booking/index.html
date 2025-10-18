@@ -1,4 +1,3 @@
-<!-- booking/index.html -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -7,10 +6,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link href="/styles/main.css" rel="stylesheet" />
   <style>
-    /* page-specific touches (optional) */
-    .booking-hero { padding: 64px 0 24px; text-align: center; }
-    .breadcrumb { font-size: .9rem; opacity:.7; margin-bottom:8px; }
-    .card.selected { outline:2px solid var(--gold); }
+    .booking-hero { padding: 56px 0 18px; text-align: center; }
+    .breadcrumb { font-size: .9rem; opacity:.75; margin-bottom:8px; }
+    .filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    #slotDate { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border,#e5e5e5); }
+    .card.selected { outline: 2px solid var(--gold, #c8a24d); }
+    .muted { opacity:.75; }
+    .notice { margin-left: 8px; font-size: .95rem; }
+    .notice.ok { color: #1a7f37; }
+    .notice.error { color: #b00020; }
   </style>
 </head>
 <body>
@@ -29,23 +33,32 @@
       <div class="container">
         <div class="breadcrumb"><a href="/">Home</a> / Booking</div>
         <h1>Book a Session</h1>
-        <p class="section-intro">Choose an open time below. You’ll receive a confirmation by email.</p>
+        <p class="section-intro">Choose your service and a day to see available times.</p>
       </div>
     </section>
 
     <section class="section">
       <div class="container">
-        <!-- Add inside the Booking section, ABOVE the <div id="slotGrid"> -->
-<div class="card glass" style="margin-bottom:16px; padding:12px;">
-  <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-    <strong>Select a day:</strong>
-    <button type="button" id="prevDay" class="btn-outline">◀</button>
-    <input type="date" id="slotDate" />
-    <button type="button" id="nextDay" class="btn-outline">▶</button>
-    <button type="button" id="todayBtn" class="btn-outline">Today</button>
-    <span id="dateNote" class="muted"></span>
-  </div>
-</div>
+
+        <!-- Filters -->
+        <div class="card glass" style="margin-bottom:16px; padding:12px;">
+          <div class="filters">
+            <strong>Service:</strong>
+            <select id="serviceType">
+              <option value="individual" selected>Individual (50m)</option>
+              <option value="couple">Couple (75m)</option>
+              <option value="extended">Extended (90m)</option>
+            </select>
+
+            <strong style="margin-left:16px;">Select a day:</strong>
+            <button type="button" id="prevDay" class="btn-outline">◀</button>
+            <input type="date" id="slotDate" />
+            <button type="button" id="nextDay" class="btn-outline">▶</button>
+            <button type="button" id="todayBtn" class="btn-outline">Today</button>
+
+            <span id="dateNote" class="muted"></span>
+          </div>
+        </div>
 
         <!-- Slots grid -->
         <div class="cards" id="slotGrid"></div>

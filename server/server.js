@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import { sendBookingEmails } from "./email.js";
+import { adminListSlots } from "./db.js"; // if not already imported
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import {
@@ -36,28 +38,41 @@ app.get('/api/slots', (req, res) => {
   }
 });
 
-app.post('/api/book', (req, res) => {
+app.post("/api/book", async (req, res) => {
   try {
-    const { slot_id, name, email, phone = '', note = '' } = req.body || {};
-    if (!slot_id || !name || !email) return res.status(400).json({ error: 'Missing fields' });
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Invalid email' });
+    const { slot_id, name, email, phone = "", note = "" } = req.body || {};
+    if (!slot_id || !name || !email)
+      return res.status(400).json({ error: "Missing fields" });
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+      return res.status(400).json({ error: "Invalid email" });
 
-    const slot = bookSlot({ slot_id, name, email, phone, note });
+    const slot = bookSlot({ slot_id, name, email, phone, note }); // throws on past/double
     res.status(201).json({ ok: true, slot });
+
+    // Fire-and-forget email (do not block response)
+    try {
+      // we have slot fields, but ensure service_type/duration (bookSlot returns full row in your db.js; if not, fetch)
+      const enrichedSlot = slot.service_type ? slot : adminListSlots(slot.starts_at, slot.ends_at)[0] || slot;
+      const START_BUFFER_MIN = 30;
+    const cutoff = new Date(new Date(slot.starts_at).getTime() - START_BUFFER_MIN * 60000);
+    if (new Date() > cutoff) {
+      return res.status(400).json({ error: `Too close to start time (${START_BUFFER_MIN}m cutoff)` });
+    }
+
+      await sendBookingEmails({ booking: { slot_id, name, email, phone, note }, slot: enrichedSlot });
+    } catch (e) {
+      console.error("[MAIL] Failed sending emails:", e.message);
+    }
   } catch (e) {
-    const msg = String(e.message || '');
-    if (/unique|UNIQUE|idx_bookings_slot/.test(msg)) return res.status(409).json({ error: 'Slot already booked' });
-    if (/Slot not available|past/.test(msg)) return res.status(400).json({ error: msg });
-    res.status(500).json({ error: 'Server error' });
+    const msg = String(e.message || "");
+    if (/unique|UNIQUE|idx_bookings_slot/.test(msg))
+      return res.status(409).json({ error: "Slot already booked" });
+    if (/Slot not available|past/.test(msg))
+      return res.status(400).json({ error: msg });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// ---------- Admin API (protected) ----------
-function requireAdmin(req, res, next) {
-  const key = req.header('x-admin-key');
-  if (!key || key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
-  next();
-}
 
 // list slots (windowed)
 app.get('/api/admin/slots', requireAdmin, (req, res) => {

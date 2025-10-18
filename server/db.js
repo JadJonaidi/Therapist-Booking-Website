@@ -113,6 +113,25 @@ export function adminDeleteSlot(id) {
   db.prepare(`DELETE FROM availability WHERE id = ?`).run(id);
   return true;
 }
+// ─── Overlap helper ───────────────────────
+export function hasOverlap(starts_at, ends_at, bufferMinutes = 0) {
+  // Expand window by buffer on both sides to enforce padding
+  const startBuf = new Date(new Date(starts_at).getTime() - bufferMinutes * 60000)
+    .toISOString().replace(/\.\d{3}Z$/, "Z");
+  const endBuf = new Date(new Date(ends_at).getTime() + bufferMinutes * 60000)
+    .toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  // Any active availability that intersects the buffered window?
+  const row = db.prepare(`
+    SELECT id FROM availability
+    WHERE is_active = 1
+      AND starts_at < @endBuf
+      AND ends_at   > @startBuf
+    LIMIT 1
+  `).get({ startBuf, endBuf });
+
+  return !!row;
+}
 
 export function adminListBookings(fromIso, toIso) {
   return db.prepare(`

@@ -1,17 +1,22 @@
 // scripts/booking.js
+// Connects to your API and supports service filtering + day navigation
+
+// Elements
 const slotGrid = document.querySelector('#slotGrid');
 const slotIdInput = document.querySelector('#slotIdInput');
 const selectedSlotLabel = document.querySelector('#selectedSlotLabel');
 const bookingForm = document.querySelector('#bookingForm');
 const bookMsg = document.querySelector('#bookMsg');
 
-// new controls
+// Filters
+const serviceTypeSel = document.querySelector('#serviceType');
 const slotDateInput = document.querySelector('#slotDate');
 const prevDayBtn = document.querySelector('#prevDay');
 const nextDayBtn = document.querySelector('#nextDay');
 const todayBtn   = document.querySelector('#todayBtn');
 const dateNote   = document.querySelector('#dateNote');
 
+// Utils
 const pad = n => String(n).padStart(2, '0');
 const toDateInputValue = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 
@@ -23,22 +28,27 @@ const fmtSlot = (sIso, eIso) => {
   return `${date} • ${st}–${et}`;
 };
 
+// Default duration by service (frontend hint; backend enforces too)
+const minsByType = { individual: 50, couple: 75, extended: 90 };
+
 async function loadSlotsForDate(dateStr) {
   if (!slotGrid) return;
   slotGrid.innerHTML = '<p class="muted">Loading available times…</p>';
+
   try {
-    // Ask backend for ONLY this date
-    const r = await fetch(`/api/slots?from=${encodeURIComponent(dateStr)}&days=1`);
+    const type = serviceTypeSel?.value || 'individual';
+    const min = minsByType[type] || 50;
+
+    const r = await fetch(`/api/slots?from=${encodeURIComponent(dateStr)}&days=1&type=${encodeURIComponent(type)}&min=${min}`);
     const slots = await r.json();
 
-    // Note under the controls
     const d = new Date(`${dateStr}T00:00:00`);
     dateNote.textContent = d.toLocaleDateString(undefined, {
       weekday:'long', month:'long', day:'numeric', year:'numeric'
     });
 
     if (!Array.isArray(slots) || slots.length === 0) {
-      slotGrid.innerHTML = '<p class="muted">No open times on this day. Try another date.</p>';
+      slotGrid.innerHTML = '<p class="muted">No open times on this day. Try another date or service.</p>';
       return;
     }
 
@@ -47,9 +57,10 @@ async function loadSlotsForDate(dateStr) {
       const card = document.createElement('article');
       card.className = 'card glass';
       card.style.cursor = 'pointer';
+      const label = `${slot.duration_minutes || min}m • ${slot.service_type || type}`;
       card.innerHTML = `
         <div class="card-body">
-          <h3 style="margin:0 0 4px;">Available</h3>
+          <h3 style="margin:0 0 4px;">${label}</h3>
           <p class="muted" style="margin:0 0 8px;">${fmtSlot(slot.starts_at, slot.ends_at)}</p>
           <div class="actions"><span class="btn-outline">Select</span></div>
         </div>
@@ -59,6 +70,8 @@ async function loadSlotsForDate(dateStr) {
         selectedSlotLabel.value = fmtSlot(slot.starts_at, slot.ends_at);
         [...slotGrid.children].forEach(el => el.classList.remove('selected'));
         card.classList.add('selected');
+        bookMsg.textContent = ''; // clear any message
+        bookMsg.className = 'notice';
       });
       slotGrid.appendChild(card);
     });
@@ -67,7 +80,7 @@ async function loadSlotsForDate(dateStr) {
   }
 }
 
-// Init: default to today
+// Init date picker
 (function initDatePicker(){
   if (!slotDateInput) return;
   const today = new Date();
@@ -98,6 +111,11 @@ async function loadSlotsForDate(dateStr) {
     loadSlotsForDate(slotDateInput.value);
   });
 
+  // re-filter when service changes
+  serviceTypeSel?.addEventListener('change', () => {
+    if (slotDateInput?.value) loadSlotsForDate(slotDateInput.value);
+  });
+
   // first load
   loadSlotsForDate(slotDateInput.value);
 })();
@@ -109,8 +127,8 @@ bookingForm?.addEventListener('submit', async (e) => {
   if (!slotIdInput.value) { bookMsg.textContent = 'Please select a time.'; return; }
 
   const payload = Object.fromEntries(new FormData(bookingForm).entries());
-  bookMsg.textContent = 'Booking…';
 
+  bookMsg.textContent = 'Booking…';
   try {
     const r = await fetch('/api/book', {
       method: 'POST',
@@ -125,7 +143,7 @@ bookingForm?.addEventListener('submit', async (e) => {
     bookMsg.textContent = 'Booked! We’ll email you shortly.';
     bookMsg.classList.add('ok');
 
-    // reset + reload selected day
+    // reset + reload selected day to remove the booked slot
     bookingForm.reset();
     selectedSlotLabel.value = '';
     slotIdInput.value = '';
