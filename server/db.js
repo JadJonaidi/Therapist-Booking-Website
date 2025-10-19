@@ -1,145 +1,226 @@
-import Database from 'better-sqlite3';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { nanoid } from 'nanoid';
+// server/db.js
+import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '..');
-const dbPath = path.join(projectRoot, 'data.sqlite');
-console.log('[DB] Using SQLite file at:', dbPath);
+const DB_FILE = path.resolve(process.cwd(), "data.sqlite");
+console.log("[DB] Using SQLite file at:", DB_FILE);
 
-const db = new Database(dbPath);
+const firstTime = !fs.existsSync(DB_FILE);
+export const db = new Database(DB_FILE);
 
-// ----- Schema -----
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
+
+// ---------- Schema ----------
 db.exec(`
-  PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS availability (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  starts_at TEXT NOT NULL,              -- ISO UTC, e.g. 2025-10-19T12:00:00Z
+  ends_at   TEXT NOT NULL,              -- ISO UTC
+  duration_minutes INTEGER NOT NULL,    -- derived or explicit
+  service_type TEXT NOT NULL DEFAULT 'individual',
+  is_active INTEGER NOT NULL DEFAULT 1  -- 1 active, 0 hidden
+);
 
-  CREATE TABLE IF NOT EXISTS availability (
-    id TEXT PRIMARY KEY,
-    starts_at TEXT NOT NULL,      -- ISO UTC
-    ends_at   TEXT NOT NULL,      -- ISO UTC
-    is_active INTEGER NOT NULL DEFAULT 1,
-    duration_minutes INTEGER NOT NULL DEFAULT 50,
-    service_type TEXT NOT NULL DEFAULT 'individual'
-  );
+CREATE TABLE IF NOT EXISTS bookings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slot_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')),
+  FOREIGN KEY(slot_id) REFERENCES availability(id) ON DELETE CASCADE
+);
 
-  CREATE TABLE IF NOT EXISTS bookings (
-    id TEXT PRIMARY KEY,
-    slot_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    phone TEXT,
-    note TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY(slot_id) REFERENCES availability(id) ON DELETE RESTRICT
-  );
+-- one booking per slot
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_slot ON bookings(slot_id);
 
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_slot ON bookings(slot_id);
-  CREATE INDEX IF NOT EXISTS idx_availability_future
-    ON availability(starts_at) WHERE is_active = 1;
+-- fast lookups
+CREATE INDEX IF NOT EXISTS idx_avail_start ON availability(starts_at);
+CREATE INDEX IF NOT EXISTS idx_avail_active ON availability(is_active);
 `);
 
-// Add columns for older DBs (ignore errors if they already exist)
-try { db.exec(`ALTER TABLE availability ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 50;`); } catch {}
-try { db.exec(`ALTER TABLE availability ADD COLUMN service_type TEXT NOT NULL DEFAULT 'individual';`); } catch {}
-
-// ----- Helpers -----
-export function insertSlot({ id = nanoid(), starts_at, ends_at, is_active = 1, duration_minutes = 50, service_type = 'individual' }) {
-  db.prepare(`
-    INSERT INTO availability (id, starts_at, ends_at, is_active, duration_minutes, service_type)
-    VALUES (@id, @starts_at, @ends_at, @is_active, @duration_minutes, @service_type)
-  `).run({ id, starts_at, ends_at, is_active, duration_minutes, service_type });
-  return id;
+// ---------- Helpers ----------
+export function iso(x) {
+  // Normalize to canonical Z format without ms
+  return new Date(x).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-export function listOpenSlots(fromIso, toIso, serviceType = null, minDuration = null) {
-  let sql = `
-    SELECT id, starts_at, ends_at, duration_minutes, service_type
+export function getSlotById(id) {
+  return db.prepare(`
+    SELECT id, starts_at, ends_at, duration_minutes, service_type, is_active
     FROM availability
-    WHERE is_active = 1 AND starts_at >= @fromIso AND starts_at < @toIso
-  `;
-  const params = { fromIso, toIso };
-
-  if (serviceType) { sql += ` AND service_type = @serviceType`; params.serviceType = serviceType; }
-  if (minDuration) { sql += ` AND duration_minutes >= @minDuration`; params.minDuration = minDuration; }
-  sql += ` ORDER BY starts_at ASC`;
-
-  const slots = db.prepare(sql).all(params);
-  if (slots.length === 0) return [];
-
-  const ids = slots.map(s => s.id);
-  const placeholders = ids.map(() => '?').join(',');
-  const booked = db.prepare(`SELECT slot_id FROM bookings WHERE slot_id IN (${placeholders})`).all(ids);
-  const bookedSet = new Set(booked.map(b => b.slot_id));
-  return slots.filter(s => !bookedSet.has(s.id));
+    WHERE id = ?
+  `).get(id);
 }
 
-export function bookSlot({ slot_id, name, email, phone = '', note = '' }) {
-  const nowIso = new Date().toISOString();
-  const tx = db.transaction(() => {
-    const slot = db.prepare(`SELECT id, starts_at, ends_at, is_active FROM availability WHERE id = ?`).get(slot_id);
-    if (!slot || slot.is_active !== 1) throw new Error('Slot not available');
-    if (new Date(slot.starts_at) < new Date()) throw new Error('Slot is in the past');
+/**
+ * Overlap check for adding new availability (admin path).
+ * Uses optional "bufferMinutes" that expands existing windows by +/- buffer.
+ */
+export function hasOverlap(starts_at, ends_at, bufferMinutes = 0) {
+  const s = new Date(starts_at).getTime();
+  const e = new Date(ends_at).getTime();
+  const buf = Math.max(0, parseInt(bufferMinutes || 0, 10)) * 60000;
+
+  const rows = db.prepare(`
+    SELECT id, starts_at, ends_at
+    FROM availability
+    WHERE is_active = 1
+      AND (
+        (strftime('%s', starts_at) <= strftime('%s', @e) + @buf/1000)
+        AND (strftime('%s', ends_at)   >= strftime('%s', @s) - @buf/1000)
+      )
+  `).all({ s: iso(starts_at), e: iso(ends_at), buf });
+
+  return rows.length > 0;
+}
+
+/**
+ * Return only *bookable* open slots in [from,to], optionally filter by service and min duration.
+ * Adds computed `reason_unavailable` if something is wrong (so UI can gray out).
+ */
+export function listOpenSlots(fromIso, toIso, serviceType = null, minDuration = null, opts = {}) {
+  const now = new Date();
+  const bufferMinutes = parseInt(process.env.BUFFER_MINUTES || "10", 10);
+  const bufferMs = bufferMinutes * 60000;
+
+  const rows = db.prepare(`
+    SELECT a.id, a.starts_at, a.ends_at, a.duration_minutes, a.service_type, a.is_active,
+           b.id AS booking_id
+    FROM availability a
+    LEFT JOIN bookings b ON b.slot_id = a.id
+    WHERE a.starts_at >= @from AND a.starts_at < @to
+      AND a.is_active = 1
+    ORDER BY a.starts_at ASC
+  `).all({ from: iso(fromIso), to: iso(toIso) });
+
+  const filtered = rows
+    .filter(r => (serviceType ? r.service_type === serviceType : true))
+    .filter(r => (minDuration ? r.duration_minutes >= minDuration : true))
+    .map(r => {
+      const s = new Date(r.starts_at).getTime();
+      const e = new Date(r.ends_at).getTime();
+
+      let reason_unavailable = null;
+      if (r.booking_id) reason_unavailable = "booked";
+      else if (!r.is_active) reason_unavailable = "inactive";
+      else if (s < now.getTime() + bufferMs) reason_unavailable = "too_soon";
+      else if (e <= s) reason_unavailable = "bad_range";
+
+      return {
+        id: r.id,
+        starts_at: iso(r.starts_at),
+        ends_at: iso(r.ends_at),
+        duration_minutes: r.duration_minutes,
+        service_type: r.service_type,
+        is_booked: !!r.booking_id,
+        reason_unavailable,
+        is_bookable: reason_unavailable === null
+      };
+    });
+
+  // Only return bookable slots to the public API
+  if (opts?.includeReasons) return filtered;
+  return filtered.filter(x => x.is_bookable);
+}
+
+/**
+ * Atomically create a booking for a slot if:
+ *  - slot exists, active
+ *  - not in the past
+ *  - not within BUFFER_MINUTES from now
+ *  - not already booked
+ */
+export function bookSlot({ slot_id, name, email, phone = "", note = "" }) {
+  const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || "10", 10);
+  const bufferMs = BUFFER_MINUTES * 60000;
+  const now = Date.now();
+
+  return db.transaction(() => {
+    const slot = db.prepare(`
+      SELECT id, starts_at, ends_at, duration_minutes, service_type, is_active
+      FROM availability
+      WHERE id = ?
+    `).get(slot_id);
+
+    if (!slot) throw new Error("Slot not found");
+    if (!slot.is_active) throw new Error("Slot not available");
+
+    const s = new Date(slot.starts_at).getTime();
+    const e = new Date(slot.ends_at).getTime();
+    if (e <= s) throw new Error("Invalid slot range");
+    if (s < now + bufferMs) throw new Error(`Slot not available (inside ${BUFFER_MINUTES}m buffer)`);
+    if (s < now) throw new Error("Slot in the past");
+
+    const existing = db.prepare(`SELECT 1 FROM bookings WHERE slot_id = ?`).get(slot.id);
+    if (existing) throw new Error("Slot already booked");
+
+    // Basic input sanity
+    const cleanName = String(name || "").trim();
+    const cleanEmail = String(email || "").trim();
+    const cleanPhone = String(phone || "").trim();
+    const cleanNote = String(note || "").trim();
+
+    if (!cleanName) throw new Error("Name required");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) throw new Error("Invalid email");
 
     db.prepare(`
-      INSERT INTO bookings (id, slot_id, name, email, phone, note, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(nanoid(), slot_id, name, email, phone, note, nowIso);
+      INSERT INTO bookings (slot_id, name, email, phone, note)
+      VALUES (@slot_id, @name, @email, @phone, @note)
+    `).run({ slot_id: slot.id, name: cleanName, email: cleanEmail, phone: cleanPhone, note: cleanNote });
 
-    return slot;
-  });
-  return tx();
+    // Return the enriched slot (used by emails)
+    return {
+      ...slot,
+      starts_at: iso(slot.starts_at),
+      ends_at: iso(slot.ends_at)
+    };
+  })();
 }
 
-// ----- Admin helpers -----
+// ---------- Admin reads ----------
 export function adminListSlots(fromIso, toIso) {
   return db.prepare(`
-    SELECT id, starts_at, ends_at, is_active, duration_minutes, service_type
-    FROM availability
-    WHERE starts_at >= @fromIso AND starts_at < @toIso
-    ORDER BY starts_at ASC
-  `).all({ fromIso, toIso });
+    SELECT a.id, a.starts_at, a.ends_at, a.duration_minutes, a.service_type, a.is_active,
+           (SELECT COUNT(1) FROM bookings b WHERE b.slot_id = a.id) AS booked_count
+    FROM availability a
+    WHERE a.starts_at >= @from AND a.starts_at < @to
+    ORDER BY a.starts_at ASC
+  `).all({ from: iso(fromIso), to: iso(toIso) });
 }
 
-export function adminAddSlot({ starts_at, ends_at, duration_minutes = 50, service_type = 'individual', is_active = 1 }) {
-  return insertSlot({ starts_at, ends_at, duration_minutes, service_type, is_active });
+export function adminAddSlot({ starts_at, ends_at, duration_minutes, service_type, is_active = 1 }) {
+  // trust caller to have done UTC conversion; still normalize
+  const s = iso(starts_at);
+  const e = iso(ends_at);
+  const dur = parseInt(duration_minutes, 10) || Math.max(5, Math.round((new Date(e) - new Date(s))/60000));
+  const type = service_type || "individual";
+  const act = is_active ? 1 : 0;
+
+  const info = db.prepare(`
+    INSERT INTO availability (starts_at, ends_at, duration_minutes, service_type, is_active)
+    VALUES (@s, @e, @dur, @type, @act)
+  `).run({ s, e, dur, type, act });
+  return info.lastInsertRowid;
 }
 
 export function adminDeleteSlot(id) {
-  // Only delete if not booked
-  const booked = db.prepare(`SELECT 1 FROM bookings WHERE slot_id = ? LIMIT 1`).get(id);
-  if (booked) throw new Error('Cannot delete: slot already booked');
+  const booked = db.prepare(`SELECT 1 FROM bookings WHERE slot_id = ?`).get(id);
+  if (booked) throw new Error("Cannot delete: slot already booked");
   db.prepare(`DELETE FROM availability WHERE id = ?`).run(id);
-  return true;
-}
-// ─── Overlap helper ───────────────────────
-export function hasOverlap(starts_at, ends_at, bufferMinutes = 0) {
-  // Expand window by buffer on both sides to enforce padding
-  const startBuf = new Date(new Date(starts_at).getTime() - bufferMinutes * 60000)
-    .toISOString().replace(/\.\d{3}Z$/, "Z");
-  const endBuf = new Date(new Date(ends_at).getTime() + bufferMinutes * 60000)
-    .toISOString().replace(/\.\d{3}Z$/, "Z");
-
-  // Any active availability that intersects the buffered window?
-  const row = db.prepare(`
-    SELECT id FROM availability
-    WHERE is_active = 1
-      AND starts_at < @endBuf
-      AND ends_at   > @startBuf
-    LIMIT 1
-  `).get({ startBuf, endBuf });
-
-  return !!row;
 }
 
+// List bookings (window)
 export function adminListBookings(fromIso, toIso) {
   return db.prepare(`
-    SELECT b.id, b.name, b.email, b.phone, b.note, b.created_at,
-           a.starts_at, a.ends_at, a.service_type, a.duration_minutes, a.id as slot_id
+    SELECT b.id, b.slot_id, b.name, b.email, b.phone, b.note, b.created_at,
+           a.starts_at, a.ends_at, a.duration_minutes, a.service_type
     FROM bookings b
     JOIN availability a ON a.id = b.slot_id
-    WHERE a.starts_at >= @fromIso AND a.starts_at < @toIso
+    WHERE a.starts_at >= @from AND a.starts_at < @to
     ORDER BY a.starts_at ASC
-  `).all({ fromIso, toIso });
+  `).all({ from: iso(fromIso), to: iso(toIso) });
 }
