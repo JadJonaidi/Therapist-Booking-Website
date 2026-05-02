@@ -1,26 +1,31 @@
 {
-  "name": "jessica'swebsite",
+  "name": "therapist-booking-website",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Full-stack therapy practice website with consultation booking, admin-managed availability, Express API routes, and SQLite persistence.",
+  "type": "module",
+  "main": "server/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "node server/server.js",
     "seed": "node server/seed.js",
     "generate": "node server/generate.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JadJonaidi/Therapist-website.git"
+    "url": "git+https://github.com/JadJonaidi/Therapist-Booking-Website.git"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "javascript",
+    "express",
+    "sqlite",
+    "booking-system",
+    "full-stack"
+  ],
+  "author": "Jad Jonaidi",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/JadJonaidi/Therapist-website/issues"
+    "url": "https://github.com/JadJonaidi/Therapist-Booking-Website/issues"
   },
-  "homepage": "https://github.com/JadJonaidi/Therapist-website#readme",
-  "description": "",
-  "type": "module",
+  "homepage": "https://github.com/JadJonaidi/Therapist-Booking-Website#readme",
   "dependencies": {
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
